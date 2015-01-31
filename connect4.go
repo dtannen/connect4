@@ -6,9 +6,9 @@ import (
 	"container/list"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
+	"strconv"
 )
 
 func take_turns(length_to_win int, board [][]int) int {
@@ -103,12 +103,20 @@ func (c *ClientPlayer) Close() {
 		client := e.Value.(ClientPlayer)
 		(*client.Con).Close()
 		client.ListChain.Remove(e)
+		client.IN <- "quit"
+		close(client.OUT)
 	}
 }
 
 func request_handler(conn *net.Conn, out chan string, lst *list.List) {
-	// 	defer close(out)
-	newclient := &ClientPlayer{conn, lst}
+	channel := make(chan string)
+	out_channel := make(chan string)
+	// defer close(channel)
+	// add listener for channel to send msgs to player
+	go send_player_data(channel, conn)
+	playername := "Player" + strconv.Itoa(lst.Len()+1)
+	newclient := &ClientPlayer{playername, conn, channel, out_channel, lst}
+	channel <- playername + "\n"
 	lst.PushBack(*newclient)
 	for {
 		msg, err := bufio.NewReader(*conn).ReadString('\n')
@@ -117,7 +125,7 @@ func request_handler(conn *net.Conn, out chan string, lst *list.List) {
 			break
 		}
 		if msg == "quit\r\n" || msg == "quit\n" {
-			fmt.Println("quitting...")
+			fmt.Println("end game.")
 			newclient.Close()
 			break
 		}
@@ -125,11 +133,21 @@ func request_handler(conn *net.Conn, out chan string, lst *list.List) {
 	}
 }
 
+func send_player_data(in chan string, conn *net.Conn) {
+	for {
+		message := <-in
+		if message == "quit" {
+			close(in)
+			break
+		}
+		io.Copy(*conn, bytes.NewBufferString(message))
+	}
+}
+
 func send_data(in <-chan string, lst *list.List) {
 	for {
 		message := <-in
 		if lst.Len() > 0 {
-			log.Print(message)
 			for e := lst.Front(); e != nil; e = e.Next() {
 				client := e.Value.(ClientPlayer)
 				io.Copy(*client.Con, bytes.NewBufferString(message))
@@ -139,8 +157,48 @@ func send_data(in <-chan string, lst *list.List) {
 }
 
 type ClientPlayer struct {
-	Con       *net.Conn  // connection of client
-	ListChain *list.List // reference to list
+	Name      string      // players name
+	Con       *net.Conn   // connection of client
+	IN        chan string // channel to send messages to user
+	OUT       chan string // channel to get messages from user
+	ListChain *list.List  // reference to list
+}
+
+func start_game(out chan<- string, lst *list.List) {
+	// initialize game board
+	game := make([][]int, 8)
+	for i := 0; i < 8; i++ {
+		game[i] = make([]int, 8)
+	}
+	length_to_win := 4
+	win := -1
+	initialize_board(game)
+	for win == -1 {
+		win = take_turns(length_to_win, game)
+	}
+	// If win
+	if win == 0 {
+		out <- "Player 1 wins!\n"
+		fmt.Printf("\x1B")
+		fmt.Printf("[36m")
+		fmt.Println("Player 1 wins!")
+		fmt.Printf("\033")
+		fmt.Printf("[0m")
+	} else if win == 1 {
+		out <- "Player 2 wins!\n"
+		fmt.Printf("\x1B")
+		fmt.Printf("[35m")
+		fmt.Println("Player 2 wins!")
+		fmt.Printf("\033")
+		fmt.Printf("[0m")
+		// If tie
+	} else if win == 2 {
+		out <- "Tie game!\n"
+		fmt.Println("Tie game!")
+		fmt.Printf("\033")
+		fmt.Printf("[0m")
+	}
+	start_game(out, lst)
 }
 
 // Main method
@@ -152,41 +210,28 @@ func main() {
 	// If no commands then default board
 	// and length to win sizes
 	if len(args) == 1 {
-
-		// The gameboard is a slice, which is a reference to an array
-		// So we will have a slice reference to another slice, similar
-		// to the double array style in C. First we use the make function
-		// to establish the total array. We will have a reference to an array of
-		// arrays in the end
-		game := make([][]int, 8)
-
-		// Now to finish it we will loop threw the array and make the array at each
-		// index
-		for i := 0; i < 8; i++ {
-			game[i] = make([]int, 8)
-		}
-
-		length_to_win := 4
-		win := -1
-
-		initialize_board(game)
-
 		psock, err := net.Listen("tcp", ":3000")
 		if err != nil {
 			// handle error
 			fmt.Println("Can't start server!")
 		}
 		clientlist := list.New()
+		game_started := -1
 		channel := make(chan string)
 		go send_data(channel, clientlist)
 		for {
 			if clientlist.Len() < 1 {
+				game_started = -1
 				conn, err := psock.Accept()
 				if err != nil {
 					return
 				}
 				go request_handler(&conn, channel, clientlist)
 			} else {
+				if game_started == -1 {
+					go start_game(channel, clientlist)
+					game_started = 1
+				}
 				conn, err := psock.Accept()
 				if err != nil {
 					return
@@ -196,32 +241,6 @@ func main() {
 			}
 		}
 
-		for win == -1 {
-			win = take_turns(length_to_win, game)
-		}
-
-		// If win
-		if win == 0 {
-			fmt.Printf("\x1B")
-			fmt.Printf("[36m")
-			fmt.Println("Player 1 wins!")
-			fmt.Printf("\033")
-			fmt.Printf("[0m")
-			return
-		} else if win == 1 {
-			fmt.Printf("\x1B")
-			fmt.Printf("[35m")
-			fmt.Println("Player 2 wins!")
-			fmt.Printf("\033")
-			fmt.Printf("[0m")
-			return
-			// If tie
-		} else if win == 2 {
-			fmt.Println("Tie game!")
-			fmt.Printf("\033")
-			fmt.Printf("[0m")
-			return
-		}
 	} else {
 		fmt.Println("Sorry invalid commands")
 		return
