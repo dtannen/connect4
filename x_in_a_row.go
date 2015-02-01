@@ -6,7 +6,6 @@ package main
 func x_in_a_row(slice []int, win_length int) int {
 
 	var count int = 0
-
 	// loop threw the array checking for blocks of win length
 	// equality
 	for i := 0; i < (len(slice) - (win_length - 1)); i++ {
@@ -15,17 +14,16 @@ func x_in_a_row(slice []int, win_length int) int {
 		if slice[i] != -1 {
 
 			for k := 1; k < win_length; k++ {
-
 				if slice[i] == slice[i+k] {
 					count++
+					if count == win_length-1 {
+						return slice[i]
+					}
 				} else {
 					count = 0
 				}
 			}
 
-			if count == win_length-1 {
-				return slice[i]
-			}
 		}
 	}
 	return -1
